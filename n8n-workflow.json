@@ -164,42 +164,36 @@
     },
     {
       "parameters": {
-        "method": "POST",
-        "url": "https://api.anthropic.com/v1/messages",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
+        "resource": "chat",
+        "operation": "message",
+        "model": "gpt-4o",
+        "messages": {
+          "values": [
             {
-              "name": "anthropic-version",
-              "value": "2023-06-01"
-            },
-            {
-              "name": "content-type",
-              "value": "application/json"
+              "role": "user",
+              "content": "=以下のProduct Spec Doc（What/Why）を、Design Doc（How）に変換してください。\n\n## 変換ルール\n- Product Specの「経緯」「AsIs」「ToBe」から、システム要件を抽出\n- 具体的なアーキテクチャ、API仕様、データモデルを設計\n- 技術的制約とテスト方針を追加\n- Markdownフォーマットで出力\n\n## Product Spec Doc\n\n{{ $json.notion_markdown }}\n\n## 出力フォーマット\n\n```markdown\n# Design Doc: [機能名]\n\n## 1. システム要件\n\n## 2. アーキテクチャ\n\n## 3. データモデル\n\n## 4. API仕様\n\n## 5. 処理フロー\n\n## 6. 技術的制約\n\n## 7. テスト方針\n```"
             }
           ]
         },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 4096,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"以下のProduct Spec Doc（What/Why）を、Design Doc（How）に変換してください。\\n\\n## 変換ルール\\n- Product Specの「経緯」「AsIs」「ToBe」から、システム要件を抽出\\n- 具体的なアーキテクチャ、API仕様、データモデルを設計\\n- 技術的制約とテスト方針を追加\\n- Markdownフォーマットで出力\\n\\n## Product Spec Doc\\n\\n{{ $json.notion_markdown }}\\n\\n## 出力フォーマット\\n\\n```markdown\\n# Design Doc: [機能名]\\n\\n## 1. システム要件\\n\\n## 2. アーキテクチャ\\n\\n## 3. データモデル\\n\\n## 4. API仕様\\n\\n## 5. 処理フロー\\n\\n## 6. 技術的制約\\n\\n## 7. テスト方針\\n```\"\n    }\n  ]\n}"
+        "options": {
+          "maxTokens": 4096
+        }
       },
-      "id": "claude-generate",
-      "name": "Claude: Generate Design Doc",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
+      "id": "openai-generate",
+      "name": "OpenAI: Generate Design Doc",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
       "position": [2200, -200],
       "credentials": {
-        "httpHeaderAuth": {
-          "id": "claude-cred",
-          "name": "Claude API"
+        "openAiApi": {
+          "id": "openai-cred",
+          "name": "OpenAI API"
         }
       }
     },
     {
       "parameters": {
-        "jsCode": "const response = $input.first().json;\nconst designDoc = response.content[0].text;\nconst notionVersion = $('Compare Versions').first().json.notion_version;\nconst now = new Date().toISOString();\n\n// Create product-spec.md with updated frontmatter\nconst productSpecContent = `---\nnotion_page_id: \"${process.env.NOTION_PAGE_ID}\"\nnotion_version: \"${notionVersion}\"\nlast_synced: \"${now}\"\n---\n\n${$('Convert to Markdown').first().json.notion_markdown}`;\n\n// Create design-doc.md\nconst designDocContent = `---\ngenerated_from: \"product-spec.md\"\ngenerated_at: \"${now}\"\nnotion_version: \"${notionVersion}\"\n---\n\n${designDoc}`;\n\nreturn [{ \n  json: { \n    product_spec: productSpecContent,\n    design_doc: designDocContent,\n    branch_name: `design-doc/sync-${now.split('T')[0]}`\n  } \n}];"
+        "jsCode": "const response = $input.first().json;\nconst designDoc = response.message?.content || response.choices?.[0]?.message?.content || response.text || '';\nconst notionVersion = $('Compare Versions').first().json.notion_version;\nconst now = new Date().toISOString();\n\n// Create product-spec.md with updated frontmatter\nconst productSpecContent = `---\nnotion_page_id: \"${process.env.NOTION_PAGE_ID}\"\nnotion_version: \"${notionVersion}\"\nlast_synced: \"${now}\"\n---\n\n${$('Convert to Markdown').first().json.notion_markdown}`;\n\n// Create design-doc.md\nconst designDocContent = `---\ngenerated_from: \"product-spec.md\"\ngenerated_at: \"${now}\"\nnotion_version: \"${notionVersion}\"\n---\n\n${designDoc}`;\n\nreturn [{ \n  json: { \n    product_spec: productSpecContent,\n    design_doc: designDocContent,\n    branch_name: `design-doc/sync-${now.split('T')[0]}`\n  } \n}];"
       },
       "id": "prepare-files",
       "name": "Prepare Files",
@@ -430,14 +424,14 @@
       "main": [
         [
           {
-            "node": "Claude: Generate Design Doc",
+            "node": "OpenAI: Generate Design Doc",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Claude: Generate Design Doc": {
+    "OpenAI: Generate Design Doc": {
       "main": [
         [
           {

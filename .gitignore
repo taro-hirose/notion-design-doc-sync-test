@@ -17,3 +17,9 @@ Thumbs.db
 # Temp
 *.tmp
 *.log
+
+# n8n
+n8n/postgres_data/
+
+# memo-app
+memo-app/frontend/node_modules/
