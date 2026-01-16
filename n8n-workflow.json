@@ -1,0 +1,509 @@
+{
+  "name": "Notion → Design Doc Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "notes": "毎日9時（平日のみ）"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "owner": "={{ $env.GITHUB_OWNER }}",
+        "repository": "={{ $env.GITHUB_REPO }}",
+        "filePath": "docs/specs/product-spec.md"
+      },
+      "id": "github-get-spec",
+      "name": "GitHub: Get product-spec.md",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [220, 0],
+      "credentials": {
+        "githubApi": {
+          "id": "github-cred",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract notion_version from frontmatter\nconst content = $input.first().json.content;\nconst frontmatterMatch = content.match(/^---\\n([\\s\\S]*?)\\n---/);\n\nlet notionVersion = null;\nif (frontmatterMatch) {\n  const frontmatter = frontmatterMatch[1];\n  const versionMatch = frontmatter.match(/notion_version:\\s*[\"']?([^\"'\\n]+)[\"']?/);\n  if (versionMatch) {\n    notionVersion = versionMatch[1];\n  }\n}\n\nreturn [{ json: { notion_version: notionVersion, raw_content: content } }];"
+      },
+      "id": "parse-frontmatter",
+      "name": "Parse Frontmatter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "resource": "page",
+        "operation": "get",
+        "pageId": "={{ $env.NOTION_PAGE_ID }}"
+      },
+      "id": "notion-get-page",
+      "name": "Notion: Get Page",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [660, 0],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-cred",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const githubVersion = $('Parse Frontmatter').first().json.notion_version;\nconst notionLastEdited = $input.first().json.last_edited_time;\n\nconst hasChanges = githubVersion !== notionLastEdited;\n\nreturn [{ \n  json: { \n    has_changes: hasChanges,\n    github_version: githubVersion,\n    notion_version: notionLastEdited,\n    notion_page: $input.first().json\n  } \n}];"
+      },
+      "id": "compare-versions",
+      "name": "Compare Versions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.has_changes }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-changes",
+      "name": "If Changes Detected",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "owner": "={{ $env.GITHUB_OWNER }}",
+        "repository": "={{ $env.GITHUB_REPO }}",
+        "filters": {
+          "state": "open",
+          "head": "design-doc/sync"
+        }
+      },
+      "id": "github-check-mr",
+      "name": "GitHub: Check Existing MR",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [1320, -100],
+      "credentials": {
+        "githubApi": {
+          "id": "github-cred",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.length }}",
+              "operation": "equal",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "if-no-mr",
+      "name": "If No Existing MR",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1540, -100]
+    },
+    {
+      "parameters": {
+        "resource": "block",
+        "operation": "getAll",
+        "blockId": "={{ $env.NOTION_PAGE_ID }}",
+        "returnAll": true
+      },
+      "id": "notion-get-blocks",
+      "name": "Notion: Get Page Content",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [1760, -200],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-cred",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert Notion blocks to Markdown\nconst blocks = $input.first().json;\n\nfunction blocksToMarkdown(blocks) {\n  let markdown = '';\n  \n  for (const block of blocks) {\n    switch (block.type) {\n      case 'heading_1':\n        markdown += `# ${getRichText(block.heading_1.rich_text)}\\n\\n`;\n        break;\n      case 'heading_2':\n        markdown += `## ${getRichText(block.heading_2.rich_text)}\\n\\n`;\n        break;\n      case 'heading_3':\n        markdown += `### ${getRichText(block.heading_3.rich_text)}\\n\\n`;\n        break;\n      case 'paragraph':\n        markdown += `${getRichText(block.paragraph.rich_text)}\\n\\n`;\n        break;\n      case 'bulleted_list_item':\n        markdown += `- ${getRichText(block.bulleted_list_item.rich_text)}\\n`;\n        break;\n      case 'numbered_list_item':\n        markdown += `1. ${getRichText(block.numbered_list_item.rich_text)}\\n`;\n        break;\n      case 'code':\n        const lang = block.code.language || '';\n        markdown += `\\`\\`\\`${lang}\\n${getRichText(block.code.rich_text)}\\n\\`\\`\\`\\n\\n`;\n        break;\n      case 'divider':\n        markdown += `---\\n\\n`;\n        break;\n    }\n  }\n  \n  return markdown;\n}\n\nfunction getRichText(richTextArray) {\n  if (!richTextArray) return '';\n  return richTextArray.map(t => t.plain_text).join('');\n}\n\nconst markdown = blocksToMarkdown(Array.isArray(blocks) ? blocks : [blocks]);\n\nreturn [{ json: { notion_markdown: markdown } }];"
+      },
+      "id": "convert-to-markdown",
+      "name": "Convert to Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, -200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-20250514\",\n  \"max_tokens\": 4096,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"以下のProduct Spec Doc（What/Why）を、Design Doc（How）に変換してください。\\n\\n## 変換ルール\\n- Product Specの「経緯」「AsIs」「ToBe」から、システム要件を抽出\\n- 具体的なアーキテクチャ、API仕様、データモデルを設計\\n- 技術的制約とテスト方針を追加\\n- Markdownフォーマットで出力\\n\\n## Product Spec Doc\\n\\n{{ $json.notion_markdown }}\\n\\n## 出力フォーマット\\n\\n```markdown\\n# Design Doc: [機能名]\\n\\n## 1. システム要件\\n\\n## 2. アーキテクチャ\\n\\n## 3. データモデル\\n\\n## 4. API仕様\\n\\n## 5. 処理フロー\\n\\n## 6. 技術的制約\\n\\n## 7. テスト方針\\n```\"\n    }\n  ]\n}"
+      },
+      "id": "claude-generate",
+      "name": "Claude: Generate Design Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2200, -200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "claude-cred",
+          "name": "Claude API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst designDoc = response.content[0].text;\nconst notionVersion = $('Compare Versions').first().json.notion_version;\nconst now = new Date().toISOString();\n\n// Create product-spec.md with updated frontmatter\nconst productSpecContent = `---\nnotion_page_id: \"${process.env.NOTION_PAGE_ID}\"\nnotion_version: \"${notionVersion}\"\nlast_synced: \"${now}\"\n---\n\n${$('Convert to Markdown').first().json.notion_markdown}`;\n\n// Create design-doc.md\nconst designDocContent = `---\ngenerated_from: \"product-spec.md\"\ngenerated_at: \"${now}\"\nnotion_version: \"${notionVersion}\"\n---\n\n${designDoc}`;\n\nreturn [{ \n  json: { \n    product_spec: productSpecContent,\n    design_doc: designDocContent,\n    branch_name: `design-doc/sync-${now.split('T')[0]}`\n  } \n}];"
+      },
+      "id": "prepare-files",
+      "name": "Prepare Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2420, -200]
+    },
+    {
+      "parameters": {
+        "operation": "createReference",
+        "owner": "={{ $env.GITHUB_OWNER }}",
+        "repository": "={{ $env.GITHUB_REPO }}",
+        "ref": "=refs/heads/{{ $json.branch_name }}",
+        "sha": "={{ $env.GITHUB_BASE_SHA }}"
+      },
+      "id": "github-create-branch",
+      "name": "GitHub: Create Branch",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2640, -200],
+      "credentials": {
+        "githubApi": {
+          "id": "github-cred",
+          "name": "GitHub API"
+        }
+      },
+      "notes": "Note: GITHUB_BASE_SHA needs to be fetched dynamically in production"
+    },
+    {
+      "parameters": {
+        "operation": "edit",
+        "owner": "={{ $env.GITHUB_OWNER }}",
+        "repository": "={{ $env.GITHUB_REPO }}",
+        "filePath": "docs/specs/product-spec.md",
+        "fileContent": "={{ $('Prepare Files').first().json.product_spec }}",
+        "commitMessage": "sync: Update product-spec.md from Notion",
+        "branch": "={{ $('Prepare Files').first().json.branch_name }}"
+      },
+      "id": "github-update-spec",
+      "name": "GitHub: Update product-spec.md",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2860, -300],
+      "credentials": {
+        "githubApi": {
+          "id": "github-cred",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "edit",
+        "owner": "={{ $env.GITHUB_OWNER }}",
+        "repository": "={{ $env.GITHUB_REPO }}",
+        "filePath": "docs/design/design-doc.md",
+        "fileContent": "={{ $('Prepare Files').first().json.design_doc }}",
+        "commitMessage": "sync: Update design-doc.md via Claude",
+        "branch": "={{ $('Prepare Files').first().json.branch_name }}"
+      },
+      "id": "github-update-design",
+      "name": "GitHub: Update design-doc.md",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [2860, -100],
+      "credentials": {
+        "githubApi": {
+          "id": "github-cred",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "createPullRequest",
+        "owner": "={{ $env.GITHUB_OWNER }}",
+        "repository": "={{ $env.GITHUB_REPO }}",
+        "title": "=sync: Design Doc update from Notion ({{ $('Prepare Files').first().json.branch_name.split('/')[1] }})",
+        "body": "## 自動同期\n\nNotionのProduct Spec Docが更新されたため、Design Docを同期しました。\n\n### 変更内容\n- `docs/specs/product-spec.md`: Notionから最新の内容を同期\n- `docs/design/design-doc.md`: Claude APIで技術設計を再生成\n\n### レビューポイント\n- [ ] システム要件が正しく抽出されているか\n- [ ] アーキテクチャに問題がないか\n- [ ] API仕様が実装可能か\n\n---\n*このMRはn8nワークフローによって自動生成されました*",
+        "head": "={{ $('Prepare Files').first().json.branch_name }}",
+        "base": "main"
+      },
+      "id": "github-create-mr",
+      "name": "GitHub: Create MR",
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1,
+      "position": [3080, -200],
+      "credentials": {
+        "githubApi": {
+          "id": "github-cred",
+          "name": "GitHub API"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-changes",
+      "name": "No Changes - Skip",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1320, 100]
+    },
+    {
+      "parameters": {},
+      "id": "mr-exists",
+      "name": "MR Exists - Notify Only",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1760, 0],
+      "notes": "TODO: Slackなどで通知を追加"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "GitHub: Get product-spec.md",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: Get product-spec.md": {
+      "main": [
+        [
+          {
+            "node": "Parse Frontmatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Frontmatter": {
+      "main": [
+        [
+          {
+            "node": "Notion: Get Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion: Get Page": {
+      "main": [
+        [
+          {
+            "node": "Compare Versions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compare Versions": {
+      "main": [
+        [
+          {
+            "node": "If Changes Detected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Changes Detected": {
+      "main": [
+        [
+          {
+            "node": "GitHub: Check Existing MR",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Changes - Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: Check Existing MR": {
+      "main": [
+        [
+          {
+            "node": "If No Existing MR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If No Existing MR": {
+      "main": [
+        [
+          {
+            "node": "Notion: Get Page Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "MR Exists - Notify Only",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notion: Get Page Content": {
+      "main": [
+        [
+          {
+            "node": "Convert to Markdown",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to Markdown": {
+      "main": [
+        [
+          {
+            "node": "Claude: Generate Design Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: Generate Design Doc": {
+      "main": [
+        [
+          {
+            "node": "Prepare Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Files": {
+      "main": [
+        [
+          {
+            "node": "GitHub: Create Branch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: Create Branch": {
+      "main": [
+        [
+          {
+            "node": "GitHub: Update product-spec.md",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GitHub: Update design-doc.md",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: Update product-spec.md": {
+      "main": [
+        [
+          {
+            "node": "GitHub: Create MR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GitHub: Update design-doc.md": {
+      "main": [
+        [
+          {
+            "node": "GitHub: Create MR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T00:00:00.000Z",
+  "versionId": "1"
+}
